@@ -1,5 +1,7 @@
 # Mis gastos
 
+Dirección: https://bertonejoaquin02-ai.github.io/Mis-gastos/
+
 App para anotar los gastos del mes desde el celular. Guarda todo en el dispositivo, funciona sin Internet y no necesita cuentas.
 
 ## Instalarla en el iPhone
@@ -13,4 +15,4 @@ En Android: abrirla en Chrome, menú ⋮ > **Instalar app**.
 En la pestaña **Datos** se guarda y se importa una copia de los gastos. Sirve para pasar los datos a otro celular.
 
 ## Publicar cambios
-GitHub Pages publica la rama `main`. Al cambiar algo, subir el número de `CACHE` en `sw.js` para que los celulares bajen la versión nueva.
+GitHub Pages publica la rama `gh-pages`. Al cambiar algo en `main`, subirlo también a `gh-pages` (`git push origin main:gh-pages`) y subir el número de `CACHE` en `sw.js` para que los celulares bajen la versión nueva.
