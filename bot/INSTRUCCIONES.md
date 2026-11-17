@@ -101,3 +101,20 @@ Listo. Cada vez que abras la app (y cada minuto mientras está abierta) trae los
 - **"número no permitido" en los logs:** el número en `NUMEROS_PERMITIDOS` no coincide. Ponelo como aparece en el log.
 - **Dejó de contestar después de un día:** estás usando el token de 24 horas. Hacé el "Token que no se vence".
 - **La app dice "La clave del bot no es correcta":** lo que pegaste no es igual a `APP_KEY`.
+
+---
+
+## Opción Telegram (sin verificar negocio)
+
+Meta pide verificar un negocio para que el bot de WhatsApp pueda contestar. Si no tenés uno registrado, usá Telegram: es el mismo bot, gratis y sin verificación. Cloudflare y Groq quedan como ya están.
+
+1. Instalá Telegram en el celular si no lo tenés.
+2. En Telegram buscá **@BotFather** (tiene tilde azul), tocá **Iniciar** y mandale `/newbot`.
+3. Te pide un nombre (ej. `Mis gastos`) y un usuario que termine en `bot` (ej. `misgastos_joaquin_bot`).
+4. Te contesta con un **token** (algo como `123456789:AAH...`). Copialo.
+5. En Cloudflare > `mis-gastos-bot` > **Settings > Variables and Secrets**, agregá como Secret: `TELEGRAM_TOKEN` = ese token. Tocá **Deploy**.
+6. Actualizá el código del bot (Edit code, borrar todo, pegar el de https://raw.githubusercontent.com/bertonejoaquin02-ai/Mis-gastos/main/bot/worker.js, Deploy).
+7. En el navegador abrí: `https://mis-gastos-bot.bertone-joaquin.workers.dev/telegram/conectar?clave=TU_APP_KEY` (reemplazá TU_APP_KEY por tu clave). Tiene que decir "✔ Telegram conectado".
+8. En Telegram abrí tu bot (el link que te dio BotFather), tocá **Iniciar** y mandale tu **APP_KEY**. Te contesta "Listo, ya te conozco".
+
+Desde ahí, mandale gastos por texto o audio igual que por WhatsApp. Solo atiende a quien le mandó la clave.
