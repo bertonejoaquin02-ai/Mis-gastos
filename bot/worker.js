@@ -80,6 +80,21 @@ export default {
       return new Response(r.ok ? '✔ Telegram conectado. Ahora abrí tu bot en Telegram y mandale la clave (APP_KEY).' : 'Telegram dijo: ' + JSON.stringify(r), { headers: { 'content-type': 'text/plain; charset=utf-8' } });
     }
 
+    // 6) Diagnóstico: revisa la configuración (se abre desde el navegador)
+    if (url.pathname === '/diagnostico') {
+      if (!env.APP_KEY || url.searchParams.get('clave') !== env.APP_KEY) return new Response('Clave incorrecta. Abrí: ' + url.origin + '/diagnostico?clave=TU_APP_KEY', { status: 401 });
+      const out = [];
+      out.push((env.BUZON ? '✔' : '✘') + ' Buzón (binding BUZON)');
+      out.push((groqKey(env) ? '✔' : '✘') + ' GROQ_API_KEY cargada');
+      out.push((env.TELEGRAM_TOKEN ? '✔' : '–') + ' TELEGRAM_TOKEN');
+      out.push((env.WHATSAPP_TOKEN && env.PHONE_NUMBER_ID ? '✔' : '–') + ' WhatsApp (WHATSAPP_TOKEN y PHONE_NUMBER_ID)');
+      try {
+        const g = await entender('gasté 1500 en el kiosco', DEFAULT_CATS, env);
+        out.push('✔ Groq entiende gastos: ' + JSON.stringify(g));
+      } catch (e) { out.push('✘ Groq: ' + motivo(e)); }
+      return new Response(out.join('\n'), { headers: { 'content-type': 'text/plain; charset=utf-8' } });
+    }
+
     if (url.pathname === '/') return new Response('Bot de Mis gastos funcionando ✔', { headers: { 'content-type': 'text/plain; charset=utf-8' } });
     return new Response('no encontrado', { status: 404 });
   }
@@ -109,8 +124,8 @@ async function procesar(body, env) {
 
         await atender(texto, env, r => responder(env, from, r));
       } catch (e) {
-        console.error(e);
-        await responder(env, from, 'Uy, no pude procesar eso. Probá de nuevo en un rato.').catch(() => {});
+        console.error(String(e));
+        await responder(env, from, 'Uy, no pude procesar eso. Probá de nuevo en un rato.\n\nDetalle: ' + motivo(e)).catch(() => {});
       }
     }
   }
@@ -158,8 +173,8 @@ async function telegram(upd, env) {
     if (!texto) return contestar('Mandame un texto o un audio, por ejemplo: "gasté 15 mil en el súper".');
     await atender(texto, env, contestar);
   } catch (e) {
-    console.error(e);
-    await contestar('Uy, no pude procesar eso. Probá de nuevo en un rato.').catch(() => {});
+    console.error(String(e));
+    await contestar('Uy, no pude procesar eso. Probá de nuevo en un rato.\n\nDetalle: ' + motivo(e)).catch(() => {});
   }
 }
 
@@ -176,6 +191,14 @@ async function tgTranscribir(fileId, env) {
   const audio = await fetch(`https://api.telegram.org/file/bot${env.TELEGRAM_TOKEN}/${info.result.file_path}`);
   if (!audio.ok) throw new Error('no bajó el audio de telegram ' + audio.status);
   return groqTranscribir(await audio.arrayBuffer(), 'audio/ogg', env);
+}
+
+// Explicación corta del error para mostrar en el chat
+function motivo(e) {
+  const m = String(e?.message || e);
+  if (/ 401/.test(m) || /invalid api key/i.test(m)) return 'la clave de Groq (GROQ_API_KEY) no es válida.';
+  if (/ 429/.test(m)) return 'Groq está limitando los pedidos, probá en unos minutos.';
+  return m.slice(0, 300);
 }
 
 const AYUDA = 'Hola 👋 Mandame tus gastos por texto o audio, por ejemplo:\n• "gasté 15 mil en el súper"\n• "nafta 30000"\n• "ayer pagué la luz 42.500"\nPodés poner varios en un mensaje. Escribí "borrar" para deshacer el último.';
@@ -201,12 +224,40 @@ async function transcribir(mediaId, env) {
 async function groqTranscribir(buf, mime, env) {
   const fd = new FormData();
   fd.append('file', new File([buf], 'audio.ogg', { type: mime }));
-  fd.append('model', 'whisper-large-v3-turbo');
   fd.append('language', 'es');
-  const r = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', { method: 'POST', headers: { Authorization: `Bearer ${env.GROQ_API_KEY}` }, body: fd });
-  const d = await r.json();
-  if (!r.ok) throw new Error('groq audio: ' + JSON.stringify(d));
-  return d.text || '';
+  let ultimoError = '';
+  for (const model of ['whisper-large-v3-turbo', 'whisper-large-v3']) {
+    fd.set('model', model);
+    const r = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', { method: 'POST', headers: { Authorization: `Bearer ${groqKey(env)}` }, body: fd });
+    const d = await r.json().catch(() => ({}));
+    if (r.ok) return d.text || '';
+    ultimoError = `Groq audio (${model}) respondió ${r.status}: ${d?.error?.message || JSON.stringify(d)}`;
+    console.error(ultimoError);
+    if (r.status === 401 || r.status === 429) break;
+  }
+  throw new Error(ultimoError);
+}
+
+const groqKey = env => String(env.GROQ_API_KEY || '').trim();
+const PREFERIDOS = ['llama-3.3-70b-versatile', 'openai/gpt-oss-120b', 'openai/gpt-oss-20b', 'moonshotai/kimi-k2-instruct', 'qwen/qwen3-32b', 'llama-3.1-8b-instant'];
+
+// Lista de modelos a probar: el elegido en GROQ_MODEL, el último que anduvo,
+// los preferidos que Groq tenga disponibles hoy, y si no, cualquier modelo de chat.
+async function modelosGroq(env) {
+  const lista = [];
+  if (env.GROQ_MODEL) lista.push(env.GROQ_MODEL);
+  const ultimo = await env.BUZON.get('groq:modelo');
+  if (ultimo) lista.push(ultimo);
+  try {
+    const r = await fetch('https://api.groq.com/openai/v1/models', { headers: { Authorization: `Bearer ${groqKey(env)}` } });
+    if (r.ok) {
+      const ids = ((await r.json()).data || []).filter(m => m.active !== false).map(m => m.id);
+      lista.push(...PREFERIDOS.filter(id => ids.includes(id)));
+      lista.push(...ids.filter(id => !/whisper|guard|tts|playai|orpheus|compound|prompt/i.test(id)));
+    } else console.error('groq models', r.status, await r.text());
+  } catch (e) { console.error('groq models', String(e)); }
+  lista.push(...PREFERIDOS);
+  return [...new Set(lista)].slice(0, 6);
 }
 
 async function entender(texto, cats, env) {
@@ -219,14 +270,23 @@ Reglas:
 - concepto: corto y claro, con mayúscula inicial (ej: "Supermercado", "Nafta", "Luz").
 - fecha: hoy salvo que diga otra cosa ("ayer", "el lunes", "el 3").
 - Si no hay ningún gasto con importe, devolvé {"gastos":[]}.`;
-  const r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${env.GROQ_API_KEY}`, 'content-type': 'application/json' },
-    body: JSON.stringify({ model: env.GROQ_MODEL || 'llama-3.3-70b-versatile', temperature: 0, response_format: { type: 'json_object' },
-      messages: [{ role: 'system', content: prompt }, { role: 'user', content: texto }] })
-  });
-  const d = await r.json();
-  if (!r.ok) throw new Error('groq chat: ' + JSON.stringify(d));
+  // Prueba los modelos en orden; si Groq retiró uno, sigue con el próximo.
+  let d, ultimoError;
+  for (const model of await modelosGroq(env)) {
+    const r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${groqKey(env)}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ model, temperature: 0, response_format: { type: 'json_object' },
+        messages: [{ role: 'system', content: prompt }, { role: 'user', content: texto }] })
+    });
+    d = await r.json().catch(() => ({}));
+    if (r.ok) { await env.BUZON.put('groq:modelo', model, { expirationTtl: 7 * 86400 }); break; }
+    ultimoError = `Groq (${model}) respondió ${r.status}: ${d?.error?.message || JSON.stringify(d)}`;
+    console.error(ultimoError);
+    d = null;
+    if (r.status === 401 || r.status === 429) break; // clave mala o límite: otro modelo no ayuda
+  }
+  if (!d) throw new Error(ultimoError || 'Groq no respondió');
   let out; try { out = JSON.parse(d.choices[0].message.content); } catch { return []; }
   return (out.gastos || []).map(g => ({
     concepto: String(g.concepto || 'Gasto').slice(0, 100),
