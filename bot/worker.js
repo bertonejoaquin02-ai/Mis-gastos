@@ -66,6 +66,11 @@ export default {
 async function procesar(body, env) {
   for (const entry of body.entry || []) for (const ch of entry.changes || []) {
     const v = ch.value || {};
+    // Estado de los mensajes que manda el bot (enviado, entregado, falló y por qué)
+    for (const st of v.statuses || []) {
+      if (st.status === 'failed') console.error('whatsapp no entregó a', st.recipient_id, JSON.stringify(st.errors || []));
+      else console.log('whatsapp estado', st.status, 'a', st.recipient_id);
+    }
     for (const msg of v.messages || []) {
       const from = msg.from;
       const permitidos = String(env.NUMEROS_PERMITIDOS || '').split(',').map(s => s.replace(/\D/g, '')).filter(Boolean);
@@ -165,7 +170,9 @@ async function responder(env, to, body) {
     headers: { Authorization: `Bearer ${env.WHATSAPP_TOKEN}`, 'content-type': 'application/json' },
     body: JSON.stringify({ messaging_product: 'whatsapp', to: dest, type: 'text', text: { body } })
   });
-  if (!r.ok) console.error('whatsapp send', r.status, await r.text());
+  const txt = await r.text();
+  if (!r.ok) console.error('whatsapp send', r.status, txt);
+  else console.log('whatsapp enviado a', dest, txt);
 }
 
 // Compara números ignorando el 9 de celulares argentinos (549... vs 54...)
