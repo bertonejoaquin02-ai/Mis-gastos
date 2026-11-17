@@ -190,13 +190,23 @@ input,select{border:1px solid var(--line);border-radius:11px;padding:12px 13px;f
     <!-- DATOS -->
     <section id="v-data" hidden>
       <h2>Tus datos</h2>
-      <p class="muted">Los gastos se guardan solo en este dispositivo, sin cuentas ni Internet. Hacé una copia de seguridad de vez en cuando y guardala en Archivos, en el mail o en WhatsApp. Si cambiás de celular, la importás en el nuevo.</p>
+      <p class="muted">Los gastos se guardan solo en este dispositivo. Hacé una copia de seguridad de vez en cuando y guardala en Archivos, en el mail o en WhatsApp. Si cambiás de celular, la importás en el nuevo.</p>
       <div class="note" id="backupnote"></div>
       <div class="stack">
         <button class="btn block" id="backup">Guardar copia de seguridad</button>
         <button class="btn secondary block" id="restorebtn">Importar copia de seguridad</button>
         <input type="file" id="restorefile" accept=".json,application/json" hidden>
         <button class="btn secondary block" id="export">Descargar gastos del mes (planilla CSV)</button>
+      </div>
+      <h2 style="margin-top:22px">Bot de WhatsApp</h2>
+      <p class="muted">Los gastos que le mandes al bot por WhatsApp aparecen solos cuando abrís la app. Pegá acá los dos datos de las instrucciones (una sola vez).</p>
+      <div class="form">
+        <div class="field"><label for="b-url">Dirección del bot</label><input id="b-url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://mis-gastos-bot.tunombre.workers.dev"></div>
+        <div class="field"><label for="b-key">Clave del bot</label><input id="b-key" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
+      </div>
+      <div class="note" id="botnote">Todavía no conectaste el bot.</div>
+      <div class="stack">
+        <button class="btn block" id="botsave">Guardar y traer gastos del bot</button>
       </div>
       <p class="muted" style="margin-top:18px">En iPhone, abrí la app desde el ícono de la pantalla de inicio. Así iOS no borra los datos aunque pase tiempo sin usarla.</p>
     </section>
@@ -308,6 +318,7 @@ async function afterData(){
     return;
   }
   ensureRecurring(keyOf(month));
+  if(!afterData.synced){ afterData.synced=true; setTimeout(()=>botSync(),300); }
 }
 
 // Genera los gastos fijos del mes abierto (solo meses ya iniciados y desde el mes en que se creó el fijo).
@@ -551,7 +562,54 @@ $('restorefile').onchange=async ev=>{
   try{ generating.clear(); seeded=true; db.restore({categories:d.categories||{},recurring:d.recurring||{},expenses:d.expenses||{}}); toast('Copia importada'); renderBackupNote(); }catch(e){ fail(e); }
 };
 
-window.addEventListener('focus',()=>{ if(allLoaded()) ensureRecurring(keyOf(month)); });
+// ---------- bot de WhatsApp ----------
+// Trae del buzón del bot los gastos nuevos, los guarda acá y le avisa cuáles ya guardó.
+let syncing=false;
+async function botSync(manual){
+  const m=meta(); if(!m.botUrl||!m.botKey){ if(manual) toast('Completá la dirección y la clave del bot.'); return; }
+  if(syncing||!allLoaded()||!cats.length) return; syncing=true;
+  const base=m.botUrl.replace(/\/+$/,'');
+  const call=body=>fetch(base+'/sync',{method:'POST',headers:{'content-type':'application/json','x-clave':m.botKey},body:JSON.stringify({categorias:catsSorted().map(c=>c.name),...body})});
+  try{
+    const r=await call({}); if(r.status===401) throw {bot:'clave'}; if(!r.ok) throw {bot:'net'};
+    const {gastos=[]}=await r.json(), ok=[]; let n=0;
+    const byName=nm=>cats.find(c=>c.name.toLowerCase()===String(nm||'').toLowerCase());
+    const fallback=cats.find(c=>/otro/i.test(c.name))||catsSorted().slice(-1)[0];
+    for(const g of gastos){
+      const id='w_'+g.id;
+      if(!exps.some(e=>e.id===id) && Number(g.importe)>0 && /^\d{4}-\d{2}-\d{2}$/.test(g.fecha||'')){
+        await col('expenses').doc(id).set({categoryId:(byName(g.categoria)||fallback).id,concept:String(g.concepto||'Gasto').slice(0,100),amount:Math.round(Number(g.importe)*100)/100,date:g.fecha,paid:true,recurringId:null,origen:'whatsapp'});
+        n++;
+      }
+      ok.push(g.id);
+    }
+    if(ok.length) await call({confirmados:ok}).catch(()=>{});
+    setMeta({botLast:Date.now()}); renderBotNote();
+    if(n) toast(n===1?'Llegó 1 gasto de WhatsApp':`Llegaron ${n} gastos de WhatsApp`);
+    else if(manual) toast('Bot conectado. No hay gastos nuevos.');
+  }catch(e){
+    console.error(e);
+    if(e?.code) fail(e);
+    else if(manual) toast(e?.bot==='clave'?'La clave del bot no es correcta.':'No me pude conectar con el bot. Revisá la dirección y tu Internet.');
+  }finally{ syncing=false; }
+}
+function renderBotNote(){
+  const m=meta();
+  $('b-url').value=m.botUrl||''; $('b-key').value=m.botKey||'';
+  $('botnote').textContent = !m.botUrl ? 'Todavía no conectaste el bot.'
+    : m.botLast ? `Bot conectado. Última revisión: ${new Date(m.botLast).toLocaleString('es-AR',{dateStyle:'short',timeStyle:'short'})}` : 'Bot guardado, todavía sin revisar.';
+}
+$('botsave').onclick=()=>{
+  const u=$('b-url').value.trim(), k=$('b-key').value.trim();
+  if(!/^https:\/\/\S+$/.test(u)){ toast('La dirección tiene que empezar con https://'); return; }
+  if(!k){ toast('Falta la clave del bot.'); return; }
+  setMeta({botUrl:u,botKey:k}); renderBotNote(); botSync(true);
+};
+renderBotNote();
+setInterval(()=>{ if(document.visibilityState==='visible') botSync(); },60000);
+document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='visible') botSync(); });
+
+window.addEventListener('focus',()=>{ if(allLoaded()) ensureRecurring(keyOf(month)); botSync(); });
 start().catch(e=>{ console.error(e); $('status').textContent='No se pudo iniciar la app. Recargá la página.'; });
 if('serviceWorker' in navigator && window.isSecureContext) navigator.serviceWorker.register('sw.js').catch(()=>{});
 })();
